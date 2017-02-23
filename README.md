@@ -8,7 +8,14 @@ API.
 Because the Shippo API does not allow for filtering records by date or ID, all runs
 of the Shippo tap will pull all data. 
 
-# Roadmap
+# Supported Endpoints
+
+The following objects are pulled from the Shippo API:
+* Addresses
+* Parcels
+* Refunds
+* Shipments
+* Transactions
 
 This implementation does not retrieve customs items, customs declarations, manifests,
 or carrier accounts. 
