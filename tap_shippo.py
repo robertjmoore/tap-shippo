@@ -14,7 +14,9 @@ logger = singer.get_logger()
 state = {}
 
 def authed_get(url):
-    return session.request(method='get', url=url)
+    resp = session.request(method='get', url=url)
+    resp.raise_for_status()
+    return resp
 
 def authed_get_all_pages(url):
     while True:
