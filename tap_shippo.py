@@ -2,6 +2,7 @@
 
 import os
 import argparse
+import backoff
 import logging
 import requests
 import singer
@@ -13,6 +14,15 @@ session = requests.Session()
 logger = singer.get_logger()
 state = {}
 
+
+def client_error(e):
+    return e.response is not None and 400 <= e.response.status_code < 500
+
+@backoff.on_exception(backoff.expo,
+                      (requests.exceptions.RequestException),
+                      max_tries=5,
+                      giveup=client_error,
+                      factor=2)
 def authed_get(url):
     resp = session.request(method='get', url=url)
     resp.raise_for_status()

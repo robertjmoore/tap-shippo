@@ -10,6 +10,7 @@ setup(name='tap-shippo',
       classifiers=['Programming Language :: Python :: 3 :: Only'],
       py_modules=['tap_shippo'],
       install_requires=['singer-python>=0.2.1',
+                        'backoff==1.3.2',
                         'requests==2.12.4'],
       entry_points='''
           [console_scripts]
