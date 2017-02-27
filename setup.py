@@ -4,12 +4,13 @@ from setuptools import setup, find_packages
 
 setup(name='tap-shippo',
       version='0.1.0',
-      description='Singer Tap for Shippo',
+      description='Singer.io tap for extracting data from the Shippo API',
       author='Robert J. Moore',
-      url='https://github.com/robertjmoore/tap-shippo',
+      url='http://singer.io',
       classifiers=['Programming Language :: Python :: 3 :: Only'],
       py_modules=['tap_shippo'],
-      install_requires=['stitchstream-python>=0.6.0',
+      install_requires=['singer-python>=0.2.1',
+                        'backoff==1.3.2',
                         'requests==2.12.4'],
       entry_points='''
           [console_scripts]

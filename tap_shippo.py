@@ -2,19 +2,31 @@
 
 import os
 import argparse
+import backoff
 import logging
 import requests
-import stitchstream as ss
+import singer
 import sys
 import json
 import datetime
 
 session = requests.Session()
-logger = ss.get_logger()
+logger = singer.get_logger()
 state = {}
 
+
+def client_error(e):
+    return e.response is not None and 400 <= e.response.status_code < 500
+
+@backoff.on_exception(backoff.expo,
+                      (requests.exceptions.RequestException),
+                      max_tries=5,
+                      giveup=client_error,
+                      factor=2)
 def authed_get(url):
-    return session.request(method='get', url=url)
+    resp = session.request(method='get', url=url)
+    resp.raise_for_status()
+    return resp
 
 def authed_get_all_pages(url):
     while True:
@@ -408,7 +420,7 @@ refund_schema = {'type': 'object',
 
 def write_all_records(url, schemaName):
     for results in authed_get_all_pages(url):
-        ss.write_records(schemaName, results)
+        singer.write_records(schemaName, results)
 
 def do_sync(args):
     global state
@@ -431,28 +443,28 @@ def do_sync(args):
                 state = json.loads(line.strip())
 
     logger.info('Replicating all addresses')
-    ss.write_schema('addresses', address_schema, 'object_id')
+    singer.write_schema('addresses', address_schema, 'object_id')
     write_all_records('https://api.goshippo.com/addresses/', 'addresses')
 
     logger.info('Replicating all parcels')
-    ss.write_schema('parcels', parcel_schema, 'object_id')
+    singer.write_schema('parcels', parcel_schema, 'object_id')
     write_all_records('https://api.goshippo.com/parcels/', 'parcels')
 
     logger.info('Replicating all shipments')
-    ss.write_schema('shipments', shipment_schema, 'object_id')
+    singer.write_schema('shipments', shipment_schema, 'object_id')
     write_all_records('https://api.goshippo.com/shipments/', 'shipments')
 
     logger.info('Replicating all transactions')
-    ss.write_schema('transactions', transaction_schema, 'object_id')
+    singer.write_schema('transactions', transaction_schema, 'object_id')
     write_all_records('https://api.goshippo.com/transactions/', 'transactions')
 
     logger.info('Replicating all refunds')
-    ss.write_schema('refunds', refund_schema, 'object_id')
+    singer.write_schema('refunds', refund_schema, 'object_id')
     write_all_records('https://api.goshippo.com/refunds/', 'refunds')
 
     #because there incremental replication is not possible, writing state is not actually
     #doing anything but sending back whatever state, if any, was passed in at the beginning
-    ss.write_state(state)
+    singer.write_state(state)
 
 
 def main():
