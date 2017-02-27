@@ -9,7 +9,7 @@ setup(name='tap-shippo',
       url='http://singer.io',
       classifiers=['Programming Language :: Python :: 3 :: Only'],
       py_modules=['tap_shippo'],
-      install_requires=['singer-python>=0.7.1',
+      install_requires=['singer-python>=0.2.1',
                         'requests==2.12.4'],
       entry_points='''
           [console_scripts]
