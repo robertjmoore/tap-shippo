@@ -36,6 +36,8 @@ def client_error(e):
 def gen_request(endpoint):
     url = BASE_URL + endpoint
     headers = {'Authorization': 'ShippoToken ' + CONFIG['token']}
+    if 'user_agent' in CONFIG:
+        headers['User-Agent'] = CONFIG['user_agent']
 
     while True:
         req = requests.Request("GET", url, headers=headers).prepare()
