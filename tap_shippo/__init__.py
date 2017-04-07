@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 
 import backoff
+import os
 
 import requests
 import singer
 
-from tap_shippo import utils
+from singer import utils
 
 
 REQUIRED_CONFIG_KEYS = ['start_date', 'token']
@@ -15,6 +16,12 @@ CONFIG = {}
 
 session = requests.Session()
 logger = singer.get_logger()
+
+def get_abs_path(path):
+    return os.path.join(os.path.dirname(os.path.realpath(__file__)), path)
+
+def load_schema(entity):
+    return utils.load_json(get_abs_path("schemas/{}.json".format(entity)))
 
 
 def get_start(entity):
@@ -59,7 +66,7 @@ def sync_entity(entity):
     start = get_start(entity)
     logger.info("Replicating all {} from {}".format(entity, start))
 
-    schema = utils.load_schema(entity)
+    schema = load_schema(entity)
     singer.write_schema(entity, schema, ["object_id"])
 
     for row in gen_request(entity):
@@ -83,9 +90,9 @@ def do_sync():
 
 
 def main():
-    config, state = utils.parse_args(REQUIRED_CONFIG_KEYS)
-    CONFIG.update(config)
-    STATE.update(state)
+    args = utils.parse_args(REQUIRED_CONFIG_KEYS)
+    CONFIG.update(args.config)
+    STATE.update(args.state)
     do_sync()
 
 
