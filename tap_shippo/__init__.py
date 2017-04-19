@@ -2,6 +2,7 @@
 
 import backoff
 import os
+import time
 
 import requests
 import singer
@@ -34,32 +35,35 @@ def get_start(entity):
 def client_error(e):
     return e.response is not None and 400 <= e.response.status_code < 500
 
-
 @backoff.on_exception(backoff.expo,
                       (requests.exceptions.RequestException),
                       max_tries=5,
                       giveup=client_error,
                       factor=2)
 def gen_request(endpoint):
-    url = BASE_URL + endpoint
+    if endpoint in STATE and STATE[endpoint].startswith(BASE_URL):
+        url = STATE[endpoint]
+    else:
+        url = BASE_URL + endpoint + "?results=1000"
+
     headers = {'Authorization': 'ShippoToken ' + CONFIG['token']}
     if 'user_agent' in CONFIG:
         headers['User-Agent'] = CONFIG['user_agent']
 
-    while True:
+    while url:
         req = requests.Request("GET", url, headers=headers).prepare()
-        logger.debug("GET {}".format(req.url))
+        logger.info("GET {}".format(req.url))
+        start_time = time.time()
         resp = session.send(req)
+        duration = time.time() - start_time
         resp.raise_for_status()
-
         data = resp.json()
-        for row in data['results']:
+        rows = data['results']
+        url = data.get('next')
+        STATE[endpoint] = url
+        logger.info("Got %d records in %.0f seconds, %.2f r/s", len(rows), duration, len(rows) / duration)
+        for row in rows:
             yield row
-
-        if data['next'] is None:
-            break
-
-        url = data['next']
 
 
 def sync_entity(entity):
@@ -74,6 +78,7 @@ def sync_entity(entity):
             singer.write_record(entity, row)
             utils.update_state(STATE, entity, row['object_updated'])
 
+    # Note that we don't print out state until the end
     singer.write_state(STATE)
 
 
