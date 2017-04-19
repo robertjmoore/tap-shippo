@@ -18,10 +18,13 @@ CONFIG = {}
 SESSION = requests.Session()
 LOGGER = singer.get_logger()
 
+# Field names, for the results we get from Shippo, and for the state map
 MAX_OBJECT_UPDATED = 'max_object_updated'
 OBJECT_UPDATED = 'object_updated'
 START_DATE = 'start_date'
 NEXT = 'next'
+
+# List of all the endpoints we'll sync.
 ENDPOINTS = [
     BASE_URL + "addresses?results=10",
     BASE_URL + "parcels?results=10",
@@ -32,20 +35,18 @@ ENDPOINTS = [
 
 
 def load_schema(entity):
+    '''Returns the schema for the specified entity'''
     path = os.path.join(os.path.dirname(os.path.realpath(__file__)),
                         "schemas/{}.json".format(entity))
     return utils.load_json(path)
 
 
 def client_error(exc):
+    '''Indicates whether the given RequestException is a 4xx response'''
     return exc.response is not None and 400 <= exc.response.status_code < 500
 
-@backoff.on_exception(backoff.expo,
-                      (requests.exceptions.RequestException),
-                      max_tries=5,
-                      giveup=client_error,
-                      factor=2)
 def parse_entity_from_url(url):
+    '''Given a Shippo URL, extract the entity type (e.g. "addresses")'''
     match = re.match(URL_PATTERN, url)
     if not match:
         raise ValueError("Can't determine entity type from URL " + url)
@@ -53,13 +54,28 @@ def parse_entity_from_url(url):
 
 
 def init_state_for_entity(state, entity):
+    '''Initialize the state for the given entity type. Ensures the
+    max_object_updated field is set to the start date from the config if it
+    doesn't already exist.
+
+    '''
     if MAX_OBJECT_UPDATED not in state:
         state[MAX_OBJECT_UPDATED] = {}
     if entity not in state[MAX_OBJECT_UPDATED]:
         state[MAX_OBJECT_UPDATED][entity] = CONFIG[START_DATE]
 
-
+@backoff.on_exception(backoff.expo,
+                      (requests.exceptions.RequestException),
+                      max_tries=5,
+                      giveup=client_error,
+                      factor=2)
 def request(url):
+    '''Make a request to the given Shippo URL.
+
+    Handles retrying, status checking. Logs request duration and records
+    per second
+
+    '''
     headers = {'Authorization': 'ShippoToken ' + CONFIG['token']}
     if 'user_agent' in CONFIG:
         headers['User-Agent'] = CONFIG['user_agent']
