@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 
-import backoff
 import os
 import time
 
+import backoff
 import requests
 import singer
 
@@ -15,8 +15,8 @@ BASE_URL = "https://api.goshippo.com/"
 STATE = {}
 CONFIG = {}
 
-session = requests.Session()
-logger = singer.get_logger()
+SESSION = requests.Session()
+LOGGER = singer.get_logger()
 
 def get_abs_path(path):
     return os.path.join(os.path.dirname(os.path.realpath(__file__)), path)
@@ -34,8 +34,8 @@ def get_start(entity):
         return CONFIG[START_DATE]
 
 
-def client_error(e):
-    return e.response is not None and 400 <= e.response.status_code < 500
+def client_error(exc):
+    return exc.response is not None and 400 <= exc.response.status_code < 500
 
 @backoff.on_exception(backoff.expo,
                       (requests.exceptions.RequestException),
@@ -54,16 +54,17 @@ def gen_request(endpoint):
 
     while url:
         req = requests.Request("GET", url, headers=headers).prepare()
-        logger.info("GET {}".format(req.url))
+        LOGGER.info("GET %s", req.url)
         start_time = time.time()
-        resp = session.send(req)
+        resp = SESSION.send(req)
         duration = time.time() - start_time
         resp.raise_for_status()
         data = resp.json()
         rows = data['results']
         url = data.get('next')
         STATE[endpoint] = url
-        logger.info("Got %d records in %.0f seconds, %.2f r/s", len(rows), duration, len(rows) / duration)
+        LOGGER.info("Got %d records in %.0f seconds, %.2f r/s",
+                    len(rows), duration, len(rows) / duration)
         for row in rows:
             yield row
 
@@ -86,10 +87,13 @@ def sync_entity(entity):
 
     start = STATE[entity][OBJECT_UPDATED]
     max_object_updated = start
-    logger.info("Replicating all {} from {}".format(entity, start))
+    LOGGER.info("Replicating all %s from %s", entity, start)
 
     schema = load_schema(entity)
     singer.write_schema(entity, schema, ["object_id"])
+
+    rows_read = 0
+    rows_written = 0
 
     for row in gen_request(entity):
         updated = row[OBJECT_UPDATED]
@@ -100,7 +104,7 @@ def sync_entity(entity):
         if updated >= max_object_updated:
             max_object_updated = updated
 
-    logger.info("Done syncing %s. Read %d records, wrote %d (%.2f%%)",
+    LOGGER.info("Done syncing %s. Read %d records, wrote %d (%.2f%%)",
                 entity, rows_read, rows_written, 100.0 * rows_written / float(rows_read))
     # We don't update the state with the max observed object_updated until
     # we've gotten the whole batch, because the results are not in sorted
@@ -111,7 +115,7 @@ def sync_entity(entity):
 
 
 def do_sync():
-    logger.info("Starting sync")
+    LOGGER.info("Starting sync")
 
     sync_entity("addresses")
     sync_entity("parcels")
@@ -119,7 +123,7 @@ def do_sync():
     sync_entity("transactions")
     sync_entity("refunds")
 
-    logger.info("Sync completed")
+    LOGGER.info("Sync completed")
 
 
 def main():
