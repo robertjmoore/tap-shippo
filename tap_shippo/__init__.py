@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import os
+import re
 import time
 
 import backoff
@@ -12,6 +13,7 @@ from singer import utils
 
 REQUIRED_CONFIG_KEYS = ['start_date', 'token']
 BASE_URL = "https://api.goshippo.com/"
+URL_PATTERN = r'https://api.goshippo.com/(\w+).*'
 CONFIG = {}
 SESSION = requests.Session()
 LOGGER = singer.get_logger()
@@ -21,20 +23,18 @@ OBJECT_UPDATED = 'object_updated'
 START_DATE = 'start_date'
 NEXT = 'next'
 ENDPOINTS = [
-    BASE_URL + "addresses?results=1000",
-    BASE_URL + "parcels?results=1000",
-    BASE_URL + "shipments?results=1000",
-    BASE_URL + "transactions?results=1000",
-    BASE_URL + "refunds?results=1000"
+    BASE_URL + "addresses?results=10",
+    BASE_URL + "parcels?results=10",
+    BASE_URL + "shipments?results=10",
+    BASE_URL + "transactions?results=10",
+    BASE_URL + "refunds?results=10"
 ]
 
 
-def get_abs_path(path):
-    return os.path.join(os.path.dirname(os.path.realpath(__file__)), path)
-
-
 def load_schema(entity):
-    return utils.load_json(get_abs_path("schemas/{}.json".format(entity)))
+    path = os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                        "schemas/{}.json".format(entity))
+    return utils.load_json(path)
 
 
 def client_error(exc):
@@ -45,12 +45,16 @@ def client_error(exc):
                       max_tries=5,
                       giveup=client_error,
                       factor=2)
-
 def parse_entity_from_url(url):
-    return "addresses"
+    match = re.match(URL_PATTERN, url)
+    if not match:
+        raise ValueError("Can't determine entity type from URL " + url)
+    return match.group(1)
 
 
 def init_state_for_entity(state, entity):
+    if MAX_OBJECT_UPDATED not in state:
+        state[MAX_OBJECT_UPDATED] = {}
     if entity not in state[MAX_OBJECT_UPDATED]:
         state[MAX_OBJECT_UPDATED][entity] = CONFIG[START_DATE]
 
@@ -75,7 +79,7 @@ def sync_endpoint(url, state):
 
     entity = parse_entity_from_url(url)
     init_state_for_entity(state, entity)
-    start = state[entity][MAX_OBJECT_UPDATED]
+    start = state[MAX_OBJECT_UPDATED][entity]
     max_object_updated = start
     LOGGER.info("Replicating all %s from %s", entity, start)
     singer.write_schema(entity, load_schema(entity), ["object_id"])
@@ -98,13 +102,14 @@ def sync_endpoint(url, state):
 
         url = data.get(NEXT)
 
-    LOGGER.info("Done syncing %s. Read %d records, wrote %d (%.2f%%)",
-                entity, rows_read, rows_written, 100.0 * rows_written / float(rows_read))
+    if rows_read:
+        LOGGER.info("Done syncing %s. Read %d records, wrote %d (%.2f%%)",
+                    entity, rows_read, rows_written, 100.0 * rows_written / float(rows_read))
     # We don't update the state with the max observed object_updated until
     # we've gotten the whole batch, because the results are not in sorted
     # order.
-    if max_object_updated > state[entity][OBJECT_UPDATED]:
-        state[entity][OBJECT_UPDATED] = max_object_updated
+    if max_object_updated > state[MAX_OBJECT_UPDATED][entity]:
+        state[MAX_OBJECT_UPDATED][entity] = max_object_updated
     singer.write_state(state)
 
 def get_starting_urls(state):
@@ -113,21 +118,15 @@ def get_starting_urls(state):
         return ENDPOINTS
     else:
         target_type = parse_entity_from_url(next_url)
+        LOGGER.info('Will pick up where we left off with URL %s (entity type %s)',
+                    next_url, target_type)
         pivot = None
         for i, url in enumerate(ENDPOINTS):
             if parse_entity_from_url(url) == target_type:
                 pivot = i
-        if not pivot:
+        if pivot is None:
             raise Exception('Unknown entity type ' + target_type)
-        endpoints = [next_url]
-        if pivot == 0:
-            endpoints.append(ENDPOINTS[1:])
-        elif pivot == len(ENDPOINTS) - 1:
-            endpoints.append(ENDPOINTS[:pivot])
-        else:
-            endpoints.append(ENDPOINTS[pivot+1:])
-            endpoints.append(ENDPOINTS[:pivot-1])
-        return endpoints
+        return [next_url] + ENDPOINTS[pivot+1:] + ENDPOINTS[:max(pivot, 0)]
 
 
 def do_sync(state):
@@ -137,6 +136,7 @@ def do_sync(state):
     for url in urls:
         sync_endpoint(url, state)
     state[NEXT] = None
+    singer.write_state(state)
     LOGGER.info("Sync completed")
 
 
