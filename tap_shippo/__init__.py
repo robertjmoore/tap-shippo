@@ -24,12 +24,14 @@ def get_abs_path(path):
 def load_schema(entity):
     return utils.load_json(get_abs_path("schemas/{}.json".format(entity)))
 
+OBJECT_UPDATED = 'object_updated'
+START_DATE = 'start_date'
 
 def get_start(entity):
-    if entity not in STATE:
-        STATE[entity] = CONFIG['start_date']
-
-    return STATE[entity]
+    if entity in STATE and OBJECT_UPDATED in STATE:
+        return STATE[entity][OBJECT_UPDATED]
+    else:
+        return CONFIG[START_DATE]
 
 
 def client_error(e):
@@ -67,18 +69,44 @@ def gen_request(endpoint):
 
 
 def sync_entity(entity):
-    start = get_start(entity)
+
+    # Initialize the state for this entity
+    if entity not in STATE:
+        STATE[entity] = {
+            # The max value of the object_updated field we've observed.
+            # Should only be set when we make it to the last page (no
+            # "next" url)
+            'object_updated': CONFIG[START_DATE],
+
+            # The next URL to get for this entity type. We set this in the
+            # state in case the Tap is terminated or files while
+            # paginating through the listing. We clear it when we get to
+            # the end of the listing.
+            'next': None}
+
+    start = STATE[entity][OBJECT_UPDATED]
+    max_object_updated = start
     logger.info("Replicating all {} from {}".format(entity, start))
 
     schema = load_schema(entity)
     singer.write_schema(entity, schema, ["object_id"])
 
     for row in gen_request(entity):
-        if row['object_updated'] >= start:
+        updated = row[OBJECT_UPDATED]
+        rows_read += 1
+        if updated >= start:
             singer.write_record(entity, row)
-            utils.update_state(STATE, entity, row['object_updated'])
+            rows_written += 1
+        if updated >= max_object_updated:
+            max_object_updated = updated
 
-    # Note that we don't print out state until the end
+    logger.info("Done syncing %s. Read %d records, wrote %d (%.2f%%)",
+                entity, rows_read, rows_written, 100.0 * rows_written / float(rows_read))
+    # We don't update the state with the max observed object_updated until
+    # we've gotten the whole batch, because the results are not in sorted
+    # order.
+    if max_object_updated > STATE[entity][OBJECT_UPDATED]:
+        STATE[entity][OBJECT_UPDATED] = max_object_updated
     singer.write_state(STATE)
 
 
