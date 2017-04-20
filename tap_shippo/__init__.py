@@ -24,6 +24,7 @@ skipping records due to clock skew.
 import copy
 import os
 import re
+import signal
 import time
 
 import backoff
@@ -182,8 +183,17 @@ def do_sync(state):
     LOGGER.info("Sync completed")
 
 
+def handle_sigterm(signum, _):
+    '''Exit gracefully'''
+    LOGGER.info('Got signal %d, exiting', signum)
+    exit(0)
+
+
 def main():
     '''Entry point'''
+    LOGGER.info('Registering signal handler')
+    signal.signal(signal.SIGTERM, handle_sigterm)
+
     args = utils.parse_args(REQUIRED_CONFIG_KEYS)
     CONFIG.update(args.config)
     state = copy.deepcopy(args.state)
