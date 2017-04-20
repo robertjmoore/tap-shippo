@@ -98,20 +98,24 @@ def sync_endpoint(url, state):
     start = state[MAX_OBJECT_UPDATED][entity]
     max_object_updated = start
     LOGGER.info("Replicating all %s from %s", entity, start)
-    singer.write_schema(entity, load_schema(entity), ["object_id"])
+
+    yield singer.SchemaMessage(
+        stream=entity,
+        schema=load_schema(entity),
+        key_properties=["object_id"])
 
     rows_read = 0
     rows_written = 0
     while url:
         state[NEXT] = url
-        singer.write_state(state)
+        yield singer.StateMessage(value=state)
         data = request(url)
 
         for row in data['results']:
             updated = row[OBJECT_UPDATED]
             rows_read += 1
             if updated >= start:
-                singer.write_record(entity, row)
+                yield singer.RecordMessage(stream=entity, record=row)
                 rows_written += 1
             if updated >= max_object_updated:
                 max_object_updated = updated
@@ -126,7 +130,8 @@ def sync_endpoint(url, state):
     # order.
     if max_object_updated > state[MAX_OBJECT_UPDATED][entity]:
         state[MAX_OBJECT_UPDATED][entity] = max_object_updated
-    singer.write_state(state)
+    yield singer.StateMessage(value=state)
+
 
 def get_starting_urls(state):
     next_url = state.get(NEXT)
@@ -150,7 +155,8 @@ def do_sync(state):
     urls = get_starting_urls(state)
     LOGGER.info('I will sync urls in this order: %s', urls)
     for url in urls:
-        sync_endpoint(url, state)
+        for msg in sync_endpoint(url, state):
+            singer.write_message(msg)
     state[NEXT] = None
     singer.write_state(state)
     LOGGER.info("Sync completed")
