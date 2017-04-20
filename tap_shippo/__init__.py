@@ -138,16 +138,18 @@ def get_starting_urls(state):
     if next_url is None:
         return ENDPOINTS
     else:
+        urls = []
         target_type = parse_entity_from_url(next_url)
         LOGGER.info('Will pick up where we left off with URL %s (entity type %s)',
                     next_url, target_type)
-        pivot = None
-        for i, url in enumerate(ENDPOINTS):
+        for url in ENDPOINTS:
             if parse_entity_from_url(url) == target_type:
-                pivot = i
-        if pivot is None:
+                urls.append(next_url)
+            elif len(urls) > 0:
+                urls.append(url)
+        if len(urls) == 0:
             raise Exception('Unknown entity type ' + target_type)
-        return [next_url] + ENDPOINTS[pivot+1:] + ENDPOINTS[:max(pivot, 0)]
+        return urls
 
 
 def do_sync(state):
