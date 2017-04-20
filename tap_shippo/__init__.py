@@ -7,7 +7,7 @@ import time
 import backoff
 import requests
 import singer
-
+import strict_rfc3339
 from singer import utils
 
 
@@ -19,7 +19,8 @@ SESSION = requests.Session()
 LOGGER = singer.get_logger()
 
 # Field names, for the results we get from Shippo, and for the state map
-MAX_OBJECT_UPDATED = 'max_object_updated'
+LAST_START_DATE = 'last_start_date'
+THIS_START_DATE = 'this_start_date'
 OBJECT_UPDATED = 'object_updated'
 START_DATE = 'start_date'
 NEXT = 'next'
@@ -34,10 +35,10 @@ ENDPOINTS = [
 ]
 
 
-def load_schema(entity):
-    '''Returns the schema for the specified entity'''
+def load_schema(stream):
+    '''Returns the schema for the specified stream'''
     path = os.path.join(os.path.dirname(os.path.realpath(__file__)),
-                        "schemas/{}.json".format(entity))
+                        "schemas/{}.json".format(stream))
     return utils.load_json(path)
 
 
@@ -45,24 +46,14 @@ def client_error(exc):
     '''Indicates whether the given RequestException is a 4xx response'''
     return exc.response is not None and 400 <= exc.response.status_code < 500
 
-def parse_entity_from_url(url):
-    '''Given a Shippo URL, extract the entity type (e.g. "addresses")'''
+
+def parse_stream_from_url(url):
+    '''Given a Shippo URL, extract the stream name (e.g. "addresses")'''
     match = re.match(URL_PATTERN, url)
     if not match:
-        raise ValueError("Can't determine entity type from URL " + url)
+        raise ValueError("Can't determine stream from URL " + url)
     return match.group(1)
 
-
-def init_state_for_entity(state, entity):
-    '''Initialize the state for the given entity type. Ensures the
-    max_object_updated field is set to the start date from the config if it
-    doesn't already exist.
-
-    '''
-    if MAX_OBJECT_UPDATED not in state:
-        state[MAX_OBJECT_UPDATED] = {}
-    if entity not in state[MAX_OBJECT_UPDATED]:
-        state[MAX_OBJECT_UPDATED][entity] = CONFIG[START_DATE]
 
 @backoff.on_exception(backoff.expo,
                       (requests.exceptions.RequestException),
@@ -93,15 +84,12 @@ def request(url):
 
 def sync_endpoint(url, state):
 
-    entity = parse_entity_from_url(url)
-    init_state_for_entity(state, entity)
-    start = state[MAX_OBJECT_UPDATED][entity]
-    max_object_updated = start
-    LOGGER.info("Replicating all %s from %s", entity, start)
+    stream = parse_stream_from_url(url)
+    LOGGER.info("Replicating all %s from %s", stream, start)
 
     yield singer.SchemaMessage(
-        stream=entity,
-        schema=load_schema(entity),
+        stream=stream,
+        schema=load_schema(stream),
         key_properties=["object_id"])
 
     rows_read = 0
@@ -112,25 +100,16 @@ def sync_endpoint(url, state):
         data = request(url)
 
         for row in data['results']:
-            updated = row[OBJECT_UPDATED]
             rows_read += 1
-            if updated >= start:
-                yield singer.RecordMessage(stream=entity, record=row)
+            if row[OBJECT_UPDATED] >= state[LAST_START_DATE]:
+                yield singer.RecordMessage(stream=stream, record=row)
                 rows_written += 1
-            if updated >= max_object_updated:
-                max_object_updated = updated
 
         url = data.get(NEXT)
 
     if rows_read:
         LOGGER.info("Done syncing %s. Read %d records, wrote %d (%.2f%%)",
-                    entity, rows_read, rows_written, 100.0 * rows_written / float(rows_read))
-    # We don't update the state with the max observed object_updated until
-    # we've gotten the whole batch, because the results are not in sorted
-    # order.
-    if max_object_updated > state[MAX_OBJECT_UPDATED][entity]:
-        state[MAX_OBJECT_UPDATED][entity] = max_object_updated
-    yield singer.StateMessage(value=state)
+                    stream, rows_read, rows_written, 100.0 * rows_written / float(rows_read))
 
 
 def get_starting_urls(state):
@@ -139,16 +118,16 @@ def get_starting_urls(state):
         return ENDPOINTS
     else:
         urls = []
-        target_type = parse_entity_from_url(next_url)
-        LOGGER.info('Will pick up where we left off with URL %s (entity type %s)',
-                    next_url, target_type)
+        target_stream = parse_stream_from_url(next_url)
+        LOGGER.info('Will pick up where we left off with URL %s (stream %s)',
+                    next_url, target_stream)
         for url in ENDPOINTS:
-            if parse_entity_from_url(url) == target_type:
+            if parse_stream_from_url(url) == target_stream:
                 urls.append(next_url)
             elif len(urls) > 0:
                 urls.append(url)
         if len(urls) == 0:
-            raise Exception('Unknown entity type ' + target_type)
+            raise Exception('Unknown stream ' + target_stream)
         return urls
 
 
@@ -160,6 +139,8 @@ def do_sync(state):
         for msg in sync_endpoint(url, state):
             singer.write_message(msg)
     state[NEXT] = None
+    state[LAST_START_DATE] = state[THIS_START_DATE]
+    state[THIS_START_DATE] = None
     singer.write_state(state)
     LOGGER.info("Sync completed")
 
@@ -167,7 +148,12 @@ def do_sync(state):
 def main():
     args = utils.parse_args(REQUIRED_CONFIG_KEYS)
     CONFIG.update(args.config)
-    do_sync(args.state)
+    state = copy.deepcopy(args.state)
+    if LAST_START_DATE not in state:
+        state[LAST_START_DATE] = CONFIG[START_DATE]
+    if THIS_START_DATE not in state:
+        state[THIS_START_DATE] = strict_rfc3339.now_to_rfc3339_utcoffset()
+    do_sync(state)
 
 
 if __name__ == '__main__':

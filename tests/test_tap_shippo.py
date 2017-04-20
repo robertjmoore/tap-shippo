@@ -1,16 +1,16 @@
 import unittest
 from tap_shippo import *
 
-class TestParseEntityFromUrl(unittest.TestCase):
+class TestParseStreamFromUrl(unittest.TestCase):
 
     def test_succeeds(self):
         url = "https://api.goshippo.com/addresses?results=1000&page=2"
-        entity = parse_entity_from_url(url)
-        self.assertEqual(entity, "addresses")
+        stream = parse_stream_from_url(url)
+        self.assertEqual(stream, "addresses")
 
     def test_fails(self):
         with self.assertRaises(ValueError):
-            entity = parse_entity_from_url("foobar")
+            stream = parse_stream_from_url("foobar")
 
     
 class TestGetStartingUrls(unittest.TestCase):
