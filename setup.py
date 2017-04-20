@@ -3,14 +3,14 @@
 from setuptools import setup
 
 setup(name='tap-shippo',
-      version='0.2.3',
+      version='1.0.0',
       description='Singer.io tap for extracting data from the Shippo API',
       author='Robert J. Moore',
       url='http://singer.io',
       classifiers=['Programming Language :: Python :: 3 :: Only'],
       py_modules=['tap_shippo'],
       install_requires=[
-          'singer-python==1.2.0',
+          'singer-python==1.5.0',
           'backoff==1.3.2',
           'requests==2.12.4',
       ],

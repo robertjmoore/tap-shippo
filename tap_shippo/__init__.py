@@ -1,38 +1,80 @@
 #!/usr/bin/env python3
 
-import backoff
-import os
+'''Tap for Shippo.
 
+The state has 0-3 fields:
+
+  next - If defined, the URL we are currently syncing. This is obtained
+         from the "next" field of the response from Shippo. It allows us to resume
+         pagination across different invocations of the tap.
+
+  last_sync_date - The datetime the last successful sync started.
+
+  this_sync_date - The datetime this sync started.
+
+Shippo does not provide a way to query for records that have been updated
+after a specific time, so we always have to get all the records from
+Shippo. Together, last_sync_date and this_sync_date allow us to avoid
+emitting messages for records that have not been updated since the last
+successful sync. We pad that timestamp by 2 days in order to avoid
+skipping records due to clock skew.
+
+'''
+
+import copy
+import os
+import re
+import time
+
+import backoff
+import pendulum
 import requests
 import singer
-
 from singer import utils
 
 
 REQUIRED_CONFIG_KEYS = ['start_date', 'token']
 BASE_URL = "https://api.goshippo.com/"
-STATE = {}
+URL_PATTERN = r'https://api.goshippo.com/(\w+).*'
 CONFIG = {}
+SESSION = requests.Session()
+LOGGER = singer.get_logger()
 
-session = requests.Session()
-logger = singer.get_logger()
+# Field names, for the results we get from Shippo, and for the state map
+LAST_START_DATE = 'last_start_date'
+THIS_START_DATE = 'this_start_date'
+OBJECT_UPDATED = 'object_updated'
+START_DATE = 'start_date'
+NEXT = 'next'
 
-def get_abs_path(path):
-    return os.path.join(os.path.dirname(os.path.realpath(__file__)), path)
-
-def load_schema(entity):
-    return utils.load_json(get_abs_path("schemas/{}.json".format(entity)))
-
-
-def get_start(entity):
-    if entity not in STATE:
-        STATE[entity] = CONFIG['start_date']
-
-    return STATE[entity]
+# List of all the endpoints we'll sync.
+ENDPOINTS = [
+    BASE_URL + "addresses?results=1000",
+    BASE_URL + "parcels?results=1000",
+    BASE_URL + "shipments?results=1000",
+    BASE_URL + "transactions?results=1000",
+    BASE_URL + "refunds?results=1000"
+]
 
 
-def client_error(e):
-    return e.response is not None and 400 <= e.response.status_code < 500
+def load_schema(stream):
+    '''Returns the schema for the specified stream'''
+    path = os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                        "schemas/{}.json".format(stream))
+    return utils.load_json(path)
+
+
+def client_error(exc):
+    '''Indicates whether the given RequestException is a 4xx response'''
+    return exc.response is not None and 400 <= exc.response.status_code < 500
+
+
+def parse_stream_from_url(url):
+    '''Given a Shippo URL, extract the stream name (e.g. "addresses")'''
+    match = re.match(URL_PATTERN, url)
+    if not match:
+        raise ValueError("Can't determine stream from URL " + url)
+    return match.group(1)
 
 
 @backoff.on_exception(backoff.expo,
@@ -40,61 +82,111 @@ def client_error(e):
                       max_tries=5,
                       giveup=client_error,
                       factor=2)
-def gen_request(endpoint):
-    url = BASE_URL + endpoint
+def request(url):
+    '''Make a request to the given Shippo URL.
+
+    Handles retrying, status checking. Logs request duration and records
+    per second
+
+    '''
     headers = {'Authorization': 'ShippoToken ' + CONFIG['token']}
     if 'user_agent' in CONFIG:
         headers['User-Agent'] = CONFIG['user_agent']
+    req = requests.Request("GET", url, headers=headers).prepare()
+    LOGGER.info("GET %s", req.url)
+    start_time = time.time()
+    resp = SESSION.send(req)
+    resp.raise_for_status()
+    duration = time.time() - start_time
+    data = resp.json()
+    size = len(data['results'])
+    LOGGER.info("Got %d records in %.0f seconds, %.2f r/s",
+                size, duration, size / duration)
+    return data
 
-    while True:
-        req = requests.Request("GET", url, headers=headers).prepare()
-        logger.debug("GET {}".format(req.url))
-        resp = session.send(req)
-        resp.raise_for_status()
+def sync_endpoint(url, state):
+    '''Syncs the url and paginates through until there are no more "next"
+    urls. Yields schema, record, and state messages. Modifies state by
+    setting the NEXT field every time we get a next url from Shippo. This
+    allows us to resume paginating if we're terminated.
 
-        data = resp.json()
+    '''
+    stream = parse_stream_from_url(url)
+    yield singer.SchemaMessage(
+        stream=stream,
+        schema=load_schema(stream),
+        key_properties=["object_id"])
+
+    if LAST_START_DATE in state:
+        start = pendulum.parse(state[LAST_START_DATE]).subtract(days=2)
+    else:
+        start = pendulum.parse(CONFIG[START_DATE])
+    LOGGER.info("Replicating all %s from %s", stream, start)
+
+    rows_read = 0
+    rows_written = 0
+    while url:
+        state[NEXT] = url
+        yield singer.StateMessage(value=state)
+        data = request(url)
+
         for row in data['results']:
-            yield row
+            rows_read += 1
+            updated = pendulum.parse(row[OBJECT_UPDATED])
+            if updated >= start:
+                yield singer.RecordMessage(stream=stream, record=row)
+                rows_written += 1
 
-        if data['next'] is None:
-            break
+        url = data.get(NEXT)
 
-        url = data['next']
-
-
-def sync_entity(entity):
-    start = get_start(entity)
-    logger.info("Replicating all {} from {}".format(entity, start))
-
-    schema = load_schema(entity)
-    singer.write_schema(entity, schema, ["object_id"])
-
-    for row in gen_request(entity):
-        if row['object_updated'] >= start:
-            singer.write_record(entity, row)
-            utils.update_state(STATE, entity, row['object_updated'])
-
-    singer.write_state(STATE)
+    if rows_read:
+        LOGGER.info("Done syncing %s. Read %d records, wrote %d (%.2f%%)",
+                    stream, rows_read, rows_written, 100.0 * rows_written / float(rows_read))
 
 
-def do_sync():
-    logger.info("Starting sync")
+def get_starting_urls(state):
+    '''Returns the list of URLs to sync. Skips over any endpoints that appear
+    before our "next" url, if next url exists in the state.
 
-    sync_entity("addresses")
-    sync_entity("parcels")
-    sync_entity("shipments")
-    sync_entity("transactions")
-    sync_entity("refunds")
+    '''
+    next_url = state.get(NEXT)
+    if next_url is None:
+        return ENDPOINTS
+    else:
+        urls = []
+        target_stream = parse_stream_from_url(next_url)
+        LOGGER.info('Will pick up where we left off with URL %s (stream %s)',
+                    next_url, target_stream)
+        for url in ENDPOINTS:
+            if parse_stream_from_url(url) == target_stream:
+                urls.append(next_url)
+            elif urls:
+                urls.append(url)
+        if not urls:
+            raise Exception('Unknown stream ' + target_stream)
+        return urls
 
-    logger.info("Sync completed")
+
+def do_sync(state):
+    '''Main function for syncing'''
+    LOGGER.info("Starting sync")
+    urls = get_starting_urls(state)
+    LOGGER.info('I will sync urls in this order: %s', urls)
+    for url in urls:
+        for msg in sync_endpoint(url, state):
+            singer.write_message(msg)
+    state[NEXT] = None
+    state[LAST_START_DATE] = state[THIS_START_DATE]
+    state[THIS_START_DATE] = None
+    singer.write_state(state)
+    LOGGER.info("Sync completed")
 
 
 def main():
+    '''Entry point'''
     args = utils.parse_args(REQUIRED_CONFIG_KEYS)
     CONFIG.update(args.config)
-    STATE.update(args.state)
-    do_sync()
-
-
-if __name__ == '__main__':
-    main()
+    state = copy.deepcopy(args.state)
+    if state.get(THIS_START_DATE) is None:
+        state[THIS_START_DATE] = pendulum.now().to_datetime_string()
+    do_sync(state)
