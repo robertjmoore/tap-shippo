@@ -24,7 +24,7 @@ class TestGetStartingUrls(unittest.TestCase):
         self.assertEqual(urls, ENDPOINTS)        
 
     def test_with_first(self):
-        url = 'https://api.goshippo.com/addresses?results=1000&page=2'
+        url = 'https://api.goshippo.com/transactions?results=1000&page=2'
         urls = get_starting_urls({'next': url})
         self.assertEqual(urls, [
             url,
@@ -34,7 +34,7 @@ class TestGetStartingUrls(unittest.TestCase):
             ENDPOINTS[4]])
 
     def test_with_last(self):
-        url = 'https://api.goshippo.com/refunds?results=1000&page=2'
+        url = 'https://api.goshippo.com/addresses?results=1000&page=2'
         urls = get_starting_urls({'next': url})
         LOGGER.info('Urls are %s', urls)
         self.assertEqual(urls, [url])

@@ -24,7 +24,6 @@ skipping records due to clock skew.
 import copy
 import os
 import re
-import signal
 import time
 
 import backoff
@@ -50,11 +49,11 @@ NEXT = 'next'
 
 # List of all the endpoints we'll sync.
 ENDPOINTS = [
-    BASE_URL + "addresses?results=1000",
-    BASE_URL + "parcels?results=1000",
-    BASE_URL + "shipments?results=1000",
     BASE_URL + "transactions?results=1000",
-    BASE_URL + "refunds?results=1000"
+    BASE_URL + "refunds?results=1000",
+    BASE_URL + "shipments?results=1000",
+    BASE_URL + "parcels?results=1000",
+    BASE_URL + "addresses?results=1000",
 ]
 
 
@@ -183,16 +182,8 @@ def do_sync(state):
     LOGGER.info("Sync completed")
 
 
-def handle_sigterm(signum, _):
-    '''Exit gracefully'''
-    LOGGER.info('Got signal %d, exiting', signum)
-    exit(0)
-
-
 def main():
     '''Entry point'''
-    LOGGER.info('Registering signal handler')
-    signal.signal(signal.SIGTERM, handle_sigterm)
 
     args = utils.parse_args(REQUIRED_CONFIG_KEYS)
     CONFIG.update(args.config)
