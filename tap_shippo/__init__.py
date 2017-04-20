@@ -1,13 +1,35 @@
 #!/usr/bin/env python3
 
+'''Tap for Shippo.
+
+The state has 0-3 fields:
+
+  next - If defined, the URL we are currently syncing. This is obtained
+         from the "next" field of the response from Shippo. It allows us to resume
+         pagination across different invocations of the tap.
+
+  last_sync_date - The datetime the last successful sync started.
+
+  this_sync_date - The datetime this sync started.
+
+Shippo does not provide a way to query for records that have been updated
+after a specific time, so we always have to get all the records from
+Shippo. Together, last_sync_date and this_sync_date allow us to avoid
+emitting messages for records that have not been updated since the last
+successful sync. We pad that timestamp by 2 days in order to avoid
+skipping records due to clock skew.
+
+'''
+
+import copy
 import os
 import re
 import time
 
 import backoff
+import pendulum
 import requests
 import singer
-import strict_rfc3339
 from singer import utils
 
 
@@ -83,14 +105,23 @@ def request(url):
     return data
 
 def sync_endpoint(url, state):
+    '''Syncs the url and paginates through until there are no more "next"
+    urls. Yields schema, record, and state messages. Modifies state by
+    setting the NEXT field every time we get a next url from Shippo. This
+    allows us to resume paginating if we're terminated.
 
+    '''
     stream = parse_stream_from_url(url)
-    LOGGER.info("Replicating all %s from %s", stream, start)
-
     yield singer.SchemaMessage(
         stream=stream,
         schema=load_schema(stream),
         key_properties=["object_id"])
+
+    if LAST_START_DATE in state:
+        start = pendulum.parse(state[LAST_START_DATE]).subtract(days=2)
+    else:
+        start = pendulum.parse(CONFIG[START_DATE])
+    LOGGER.info("Replicating all %s from %s", stream, start)
 
     rows_read = 0
     rows_written = 0
@@ -101,7 +132,8 @@ def sync_endpoint(url, state):
 
         for row in data['results']:
             rows_read += 1
-            if row[OBJECT_UPDATED] >= state[LAST_START_DATE]:
+            updated = pendulum.parse(row[OBJECT_UPDATED])
+            if updated >= start:
                 yield singer.RecordMessage(stream=stream, record=row)
                 rows_written += 1
 
@@ -113,6 +145,10 @@ def sync_endpoint(url, state):
 
 
 def get_starting_urls(state):
+    '''Returns the list of URLs to sync. Skips over any endpoints that appear
+    before our "next" url, if next url exists in the state.
+
+    '''
     next_url = state.get(NEXT)
     if next_url is None:
         return ENDPOINTS
@@ -132,6 +168,7 @@ def get_starting_urls(state):
 
 
 def do_sync(state):
+    '''Main function for syncing'''
     LOGGER.info("Starting sync")
     urls = get_starting_urls(state)
     LOGGER.info('I will sync urls in this order: %s', urls)
@@ -146,15 +183,10 @@ def do_sync(state):
 
 
 def main():
+    '''Entry point'''
     args = utils.parse_args(REQUIRED_CONFIG_KEYS)
     CONFIG.update(args.config)
     state = copy.deepcopy(args.state)
-    if LAST_START_DATE not in state:
-        state[LAST_START_DATE] = CONFIG[START_DATE]
-    if THIS_START_DATE not in state:
-        state[THIS_START_DATE] = strict_rfc3339.now_to_rfc3339_utcoffset()
+    if state.get(THIS_START_DATE) is None:
+        state[THIS_START_DATE] = pendulum.now().to_datetime_string()
     do_sync(state)
-
-
-if __name__ == '__main__':
-    main()
