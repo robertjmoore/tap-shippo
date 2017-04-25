@@ -1,4 +1,4 @@
-# tap-wootric
+# tap-shippo
 
 A [Singer](https://singer.io) tap for extracting data from the Shippo
 API.

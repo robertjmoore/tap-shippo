@@ -1,5 +1,3 @@
-.DS_Store
-
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -90,5 +88,11 @@ ENV/
 # Rope project settings
 .ropeproject
 
+# Mac
+._*
+.DS_Store
+
 # Custom stuff
 env.sh
+config.json
+.autoenv.zsh
