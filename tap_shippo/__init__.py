@@ -94,7 +94,7 @@ def request(url):
         headers['User-Agent'] = CONFIG['user_agent']
 
     LOGGER.info("GET %s", url)
-    with singer.stats.Stats(source=parse_stream_from_url(url)) as stats:
+    with singer.stats.Timer(source=parse_stream_from_url(url)) as stats:
         req = requests.Request("GET", url, headers=headers).prepare()
         resp = SESSION.send(req)
         resp.raise_for_status()
