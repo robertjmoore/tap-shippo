@@ -31,7 +31,7 @@ import pendulum
 import requests
 import singer
 from singer import utils
-
+import singer.stats
 
 REQUIRED_CONFIG_KEYS = ['start_date', 'token']
 BASE_URL = "https://api.goshippo.com/"
@@ -92,17 +92,17 @@ def request(url):
     headers = {'Authorization': 'ShippoToken ' + CONFIG['token']}
     if 'user_agent' in CONFIG:
         headers['User-Agent'] = CONFIG['user_agent']
-    req = requests.Request("GET", url, headers=headers).prepare()
-    LOGGER.info("GET %s", req.url)
-    start_time = time.time()
-    resp = SESSION.send(req)
-    resp.raise_for_status()
-    duration = time.time() - start_time
-    data = resp.json()
-    size = len(data['results'])
-    LOGGER.info("Got %d records in %.0f seconds, %.2f r/s",
-                size, duration, size / duration)
-    return data
+
+    LOGGER.info("GET %s", url)
+    with singer.stats.Timer(source=parse_stream_from_url(url)) as stats:
+        req = requests.Request("GET", url, headers=headers).prepare()
+        resp = SESSION.send(req)
+        resp.raise_for_status()
+        data = resp.json()
+        stats.record_count = len(data['results'])
+        stats.http_status_code = resp.status_code
+        return data
+
 
 def sync_endpoint(url, state):
     '''Syncs the url and paginates through until there are no more "next"
@@ -128,6 +128,7 @@ def sync_endpoint(url, state):
     while url:
         state[NEXT] = url
         yield singer.StateMessage(value=state)
+
         data = request(url)
 
         for row in data['results']:
