@@ -121,11 +121,16 @@ def sync_endpoint(url, state):
         start = pendulum.parse(state[LAST_START_DATE]).subtract(days=2)
     else:
         start = pendulum.parse(CONFIG[START_DATE])
-    LOGGER.info("Replicating all %s from %s", stream, start)
+    # The Shippo API does not return data from long ago, so we only try to
+    # replicate the last 60 days
+    sixty_days_ago = pendulum.now().subtract(days=60)
+    bounded_start = max(start, sixty_days_ago)
+    LOGGER.info("Replicating all %s from %s", stream, bounded_start)
 
     rows_read = 0
     rows_written = 0
-    while url:
+    finished = False
+    while url and not finished:
         state[NEXT] = url
         yield singer.StateMessage(value=state)
 
@@ -134,9 +139,12 @@ def sync_endpoint(url, state):
         for row in data['results']:
             rows_read += 1
             updated = pendulum.parse(row[OBJECT_UPDATED])
-            if updated >= start:
+            if updated >= bounded_start:
                 yield singer.RecordMessage(stream=stream, record=row)
                 rows_written += 1
+            else:
+                finished = True
+                break
 
         url = data.get(NEXT)
 
