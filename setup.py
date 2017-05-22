@@ -3,7 +3,7 @@
 from setuptools import setup
 
 setup(name='tap-shippo',
-      version='0.6.1',
+      version='0.6.2',
       description='Singer.io tap for extracting data from the Shippo API',
       author='Robert J. Moore',
       url='http://singer.io',

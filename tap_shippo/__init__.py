@@ -103,6 +103,13 @@ def request(url):
         stats.http_status_code = resp.status_code
         return data
 
+# Although the Shippo docs specify that `extra` is a map, sometimes they
+# return an empty array. When this happens, we'll coerce it to an empty
+# map so that it obeys the schema
+def fix_extra_map(row):
+    if row.get('extra') == []:
+        row['extra'] = {}
+    return row
 
 def sync_endpoint(url, state):
     '''Syncs the url and paginates through until there are no more "next"
@@ -140,6 +147,7 @@ def sync_endpoint(url, state):
             rows_read += 1
             updated = pendulum.parse(row[OBJECT_UPDATED])
             if updated >= bounded_start:
+                row = fix_extra_map(row)
                 yield singer.RecordMessage(stream=stream, record=row)
                 rows_written += 1
             else:
