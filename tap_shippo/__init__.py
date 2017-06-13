@@ -31,7 +31,7 @@ import pendulum
 import requests
 import singer
 from singer import utils
-import singer.stats
+import singer.metrics as metrics
 
 REQUIRED_CONFIG_KEYS = ['start_date', 'token']
 BASE_URL = "https://api.goshippo.com/"
@@ -94,14 +94,13 @@ def request(url):
         headers['User-Agent'] = CONFIG['user_agent']
 
     LOGGER.info("GET %s", url)
-    with singer.stats.Timer(source=parse_stream_from_url(url)) as stats:
+    with metrics.http_request_timer(parse_stream_from_url(url)) as timer:
         req = requests.Request("GET", url, headers=headers).prepare()
         resp = SESSION.send(req)
+        timer.tags[metrics.Tag.http_status_code] = resp.status_code
         resp.raise_for_status()
-        data = resp.json()
-        stats.record_count = len(data['results'])
-        stats.http_status_code = resp.status_code
-        return data
+        return resp.json()
+
 
 # Although the Shippo docs specify that `extra` is a map, sometimes they
 # return an empty array. When this happens, we'll coerce it to an empty
@@ -137,24 +136,26 @@ def sync_endpoint(url, state):
     rows_read = 0
     rows_written = 0
     finished = False
-    while url and not finished:
-        state[NEXT] = url
-        yield singer.StateMessage(value=state)
+    with metrics.record_counter(parse_stream_from_url(url)) as counter:
+        while url and not finished:
+            state[NEXT] = url
+            yield singer.StateMessage(value=state)
 
-        data = request(url)
+            data = request(url)
 
-        for row in data['results']:
-            rows_read += 1
-            updated = pendulum.parse(row[OBJECT_UPDATED])
-            if updated >= bounded_start:
-                row = fix_extra_map(row)
-                yield singer.RecordMessage(stream=stream, record=row)
-                rows_written += 1
-            else:
-                finished = True
-                break
+            for row in data['results']:
+                counter.increment()
+                rows_read += 1
+                updated = pendulum.parse(row[OBJECT_UPDATED])
+                if updated >= bounded_start:
+                    row = fix_extra_map(row)
+                    yield singer.RecordMessage(stream=stream, record=row)
+                    rows_written += 1
+                else:
+                    finished = True
+                    break
 
-        url = data.get(NEXT)
+            url = data.get(NEXT)
 
     if rows_read:
         LOGGER.info("Done syncing %s. Read %d records, wrote %d (%.2f%%)",
