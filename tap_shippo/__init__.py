@@ -200,7 +200,7 @@ def do_sync(state):
     LOGGER.info("Sync completed")
 
 
-def main():
+def main_impl():
     '''Entry point'''
 
     args = utils.parse_args(REQUIRED_CONFIG_KEYS)
@@ -209,3 +209,10 @@ def main():
     if state.get(THIS_START_DATE) is None:
         state[THIS_START_DATE] = pendulum.now().to_datetime_string()
     do_sync(state)
+
+def main():
+    try:
+        main_impl()
+    except Exception as exc:
+        LOGGER.critical(exc)
+        raise exc
