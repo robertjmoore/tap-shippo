@@ -31,7 +31,7 @@
             "type": "string"
         },
         "tracking_status": {
-            "type": ["null", "object"]
+            "type": ["null", "string"]
         },
         "tracking_history": {
             "type": "array"
